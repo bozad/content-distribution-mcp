@@ -25,8 +25,16 @@ export class GetXAPITwitterAdapter {
       return { channel: variant.channel, state: "failed", error: "GETXAPI_ENABLE_ACTIONS must be true to publish writes" };
     }
 
+    const authToken = profile.credentials.GETXAPI_AUTH_TOKEN;
+    if (!authToken) {
+      return { channel: variant.channel, state: "failed", error: "GETXAPI_AUTH_TOKEN required in profile" };
+    }
+    if (!variant.body.trim() || Array.from(variant.body).length > 280) {
+      return { channel: variant.channel, state: "failed", error: "GetXAPI tweet text must contain 1 to 280 characters; shorten the variant before publishing" };
+    }
+
     const baseUrl = (profile.credentials.GETXAPI_BASE_URL || DEFAULT_GETXAPI_BASE_URL).replace(/\/+$/, "");
-    const text = variant.body.slice(0, 280);
+    const text = variant.body;
 
     const res = await fetch(`${baseUrl}/twitter/tweet/create`, {
       method: "POST",
@@ -34,17 +42,20 @@ export class GetXAPITwitterAdapter {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ auth_token: authToken, text }),
     });
 
     if (!res.ok) {
-      const err = await res.text();
-      return { channel: variant.channel, state: "failed", error: `GetXAPI publish failed: ${res.status} ${err.slice(0, 180)}` };
+      // Remote error bodies can echo account credentials. Keep them out of logs.
+      return { channel: variant.channel, state: "failed", error: `GetXAPI publish failed: HTTP ${res.status}` };
     }
 
-    const data = await res.json() as { id?: string; tweet_id?: string; url?: string };
-    const tweetId = data.id || data.tweet_id;
-    const liveUrl = data.url || (tweetId ? `https://x.com/i/web/status/${tweetId}` : "");
+    const data = await res.json() as { status?: string; data?: { id?: string } };
+    const tweetId = data?.data?.id;
+    if (data?.status !== "success" || typeof tweetId !== "string" || !/^\d+$/.test(tweetId)) {
+      return { channel: variant.channel, state: "failed", error: "GetXAPI did not confirm a created tweet ID" };
+    }
+    const liveUrl = `https://x.com/i/web/status/${tweetId}`;
 
     return {
       channel: variant.channel,
